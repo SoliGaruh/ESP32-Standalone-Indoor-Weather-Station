@@ -3,7 +3,6 @@
 #include <WiFi.h>
 #include <time.h>
 #include <FS.h>
-#include <SPIFFS.h>
 #include <ezButton.h>
 #include <Wire.h>
 #include <SPI.h>
@@ -23,34 +22,21 @@ static const BaseType_t app_cpu = 1;
 #define BUTTON_PIN 23
 
 // How many ms equates to a long button press
-#define LONG_PRESS_MS 5000
+#define LONG_PRESS_MS 2000
 
+// todo: set these
 #define BME_SCK 13
 #define BME_MISO 12
 #define BME_MOSI 11
 #define BME_CS 10
 #define SEALEVELPRESSURE_HPA (1013.25)
 
-Adafruit_BME280 bme; // I2C
-
-// NTP server details
-const char *ntpServer = "pool.ntp.org";
-long gmtOffset_sec = 9 * 3600 + 30 * 60; // Default Adelaide timezone (UTC+9:30)
-const int daylightOffset_sec = 3600;     // Daylight saving time offset (1 hour)
-
-// todo: this might not be needed if getLocalTime() is used. Check later.
-bool timeIsSynced = false;
-
-// Custom parameter for time offset
-char timeOffset[6] = "9.5"; // Default value
+Adafruit_BME280 bme; // I2C sensor
 
 // LCD display is 16 characters and 2 lines. RGB address 0x6B is for LCD1602 v1.1
 DFRobot_RGBLCD1602 lcd(0x6B, 16, 2);
 
-// LCD display is 16 characters and 2 lines. RGB address 0x60 is for LCD1602 v1.0
-// DFRobot_RGBLCD1602 lcd(0x60,16,2);
-
-ezButton button(BUTTON_PIN); // create ezButton object that attaches to pin SWITCH_PIN;
+ezButton button(BUTTON_PIN); // create ezButton object that attaches to pin BUTTON_PIN;
 
 // which sensor board is being used
 int currentBoard = 0;
@@ -70,8 +56,17 @@ typedef struct message_t
     unsigned readingId;
 } message_t;
 
+enum status : char
+{
+    ok = 0,
+    failed
+};
+
 // RTOS queue settings
-const int msg_queue_len = 1; // Size of msg_queue. Only one message is needed
+
+// Size of msg_queue. Needs to be large enough to hold all messages.
+// Entering WiFi credentials can cause up to 6 messages to be generated
+const int msg_queue_len = 10;
 QueueHandle_t msg_queue;
 
 // what to display on the LCD. Default to Temperature
@@ -87,12 +82,6 @@ Sensor<float> temperatureSensor;
 Sensor<unsigned> pressureSensor;
 Sensor<unsigned> humiditySensor;
 
-enum status : char
-{
-    ok = 0,
-    failed
-};
-
 status getWiFiStatus()
 {
     if (WiFi.status() == WL_CONNECTED)
@@ -105,113 +94,60 @@ status getWiFiStatus()
     }
 }
 
-void loadTimeOffset()
+void timeSync(const char *tzInfo, const char *ntpServer1, const char *ntpServer2)
 {
-    if (!SPIFFS.exists("/timeOffset.txt"))
+    // Accurate time is necessary for certificate validion
+
+    configTzTime(tzInfo, ntpServer1, ntpServer2);
+
+    // Wait till time is synced
+    Serial.print("Syncing time");
+    int i = 0;
+    while (time(nullptr) < 1000000000l && i < 40)
     {
-        Serial.println("Time offset file does not exist");
-        return;
+        Serial.print(".");
+        delay(500);
+        i++;
     }
-    File file = SPIFFS.open("/timeOffset.txt", FILE_READ);
-    if (!file)
-    {
-        Serial.println("Failed to open file for reading");
-        return;
-    }
-    String offset = file.readString();
-    offset.trim();
-    offset.toCharArray(timeOffset, sizeof(timeOffset));
-    gmtOffset_sec = offset.toFloat() * 3600; // Convert hours to seconds
-    file.close();
+    Serial.println();
+
+    // Show time
+    time_t tnow = time(nullptr);
+    Serial.print("Synchronized time: ");
+    Serial.println(ctime(&tnow));
 }
 
-void saveTimeOffset(const char *offset)
-{
-    File file = SPIFFS.open("/timeOffset.txt", FILE_WRITE);
-    if (!file)
-    {
-        Serial.println("Failed to open file for writing");
-        return;
-    }
-    file.print(offset);
-    file.close();
-}
-
-void setupWiFi()
+void setupWiFi(int timeoutSeconds, bool resetSettings = false)
 {
     WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
 
     // WiFiManager, Local initialization. Once its business is done, there is no need to keep it around
     WiFiManager wm;
 
-    // Custom parameter for time offset
-    WiFiManagerParameter custom_time_offset("time_offset", "Time Offset (hours)", timeOffset, 6);
-    wm.addParameter(&custom_time_offset);
-
-    // Uncomment to reset settings - wipe stored credentials for testing
-    wm.resetSettings();
+    if (resetSettings)
+    {
+        wm.resetSettings();
+    }
 
     // Automatically connect using saved credentials,
     // if connection fails, it starts an access point with the specified name ("AutoConnectAP"),
     // if empty will auto generate SSID, if password is blank it will be anonymous AP (wm.autoConnect())
     // then goes into a blocking loop awaiting configuration and will return success result
+    //
+    // The device still works if the WiFi is disconnected, but the time will not be updated
 
     bool res;
-    // res = wm.autoConnect(); // auto generated AP name from chipid
 
-    wm.setTimeout(30);                    // 3 minutes
+    wm.setTimeout(timeoutSeconds);         // Set timeout in seconds
     res = wm.autoConnect("AutoConnectAP"); // anonymous ap
 
     if (!res)
     {
         Serial.println("Failed to connect");
-        // Uncomment to restart the ESP device if connection fails
-        // ESP.restart();
     }
     else
     {
         Serial.println("Connected to WiFi");
-    }
-
-    // Retrieve the time offset from the custom parameter
-    String timeOffsetStr = custom_time_offset.getValue();
-    gmtOffset_sec = timeOffsetStr.toFloat() * 3600; // Convert hours to seconds
-
-    // Save the time offset to the file
-    saveTimeOffset(timeOffsetStr.c_str());
-}
-
-void setupNTP()
-{
-    // Initialize NTP
-    Serial.println("Waiting for NTP time sync...");
-
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    // Wait until time is set
-    while (time(nullptr) < 100000)
-    {
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-    }
-
-    struct tm timeinfo;
-    if (!getLocalTime(&timeinfo))
-    {
-        Serial.println("Failed to obtain time");
-        return;
-    }
-    timeIsSynced = true;
-
-    Serial.println("Time synchronized successfully");
-    Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-
-    // Determine if daylight saving time is in effect
-    if (timeinfo.tm_isdst > 0)
-    {
-        Serial.println("Daylight Saving Time is in effect");
-    }
-    else
-    {
-        Serial.println("Standard Time is in effect");
     }
 }
 
@@ -220,12 +156,9 @@ void readSensors(void *parameter)
     message_t msg;
     unsigned readingId = 0;
 
-    // TEMP: Pause the task for 5 seconds so I can see the LCD update
-    vTaskDelay(5000 / portTICK_PERIOD_MS);
-
     while (1)
     {
-        // todo: read the sensors
+        // todo: read the sensors. can the values ever be invalid?
         //        msg.temperature = bme.readTemperature();
         //        msg.tIsValid = true;
 
@@ -235,9 +168,9 @@ void readSensors(void *parameter)
         //        msg.humidity = bme.readHumidity();
         //        msg.hIsValid = true;
 
-        // todo: store the sensor data in a queue to be processed by the main loop
+        // Store the sensor data in a queue to be processed by the main loop
         msg.tIsValid = true;
-        msg.temperature = random(-10, 31);
+        msg.temperature = random(-100, 310) / 10.0;
 
         msg.pIsValid = true;
         msg.pressure = random(1000, 1030);
@@ -249,59 +182,52 @@ void readSensors(void *parameter)
 
         xQueueSend(msg_queue, (void *)&msg, 10 / portTICK_PERIOD_MS);
 
-        // Pause the task for 60 seconds. 10 s for testing only
-        vTaskDelay(10000 / portTICK_PERIOD_MS);
-    }
-}
-
-void DisplayStatus()
-{
-    if (getWiFiStatus() == ok)
-    {
-        lcd.setCursor(14, 0); // col,row
-        lcd.print("OK");
-    }
-    else if (getWiFiStatus() == failed)
-    {
-        lcd.setCursor(14, 0);
-        lcd.print("XX");
+        // when the wifi is disconnected the main loop takes ages to process the queue, so the task needs to wait
+        // or risk overflowing the queue
+        vTaskDelay(60000 / portTICK_PERIOD_MS);
     }
 }
 
 void DisplayTemperature(Sensor<float> &ts)
 {
     lcd.clear();
-    lcd.printf("Temp:%3.1f %s", ts.GetValue(), ts.GetTime().c_str());
+//    lcd.printf("Temp:%3.1f %s", ts.GetValue(), ts.GetTime().c_str());
+    lcd.printf("Temp:%3.1f", ts.GetValue());
+    lcd.setCursor(11, 0);
+    lcd.print(ts.GetTime().c_str());
+
     lcd.setCursor(0, 1);
     lcd.printf("L:%3.1f H:%3.1f",
                ts.GetMin(),
                ts.GetMax());
-    //   lcd.setCursor(15, 1);
-    //   lcd.print(ts.GetName()[0]);
 }
 
 void DisplayPressure(Sensor<unsigned> &ps)
 {
     lcd.clear();
-    lcd.printf("Press:%4d %s", ps.GetValue(), ps.GetTime().c_str());
+//    lcd.printf("Press:%4d %s", ps.GetValue(), ps.GetTime().c_str());
+    lcd.printf("Press:%4d", ps.GetValue());
+    lcd.setCursor(11, 0);
+    lcd.print(ps.GetTime().c_str());
+
     lcd.setCursor(0, 1);
     lcd.printf("L:%4d H:%4d",
                ps.GetMin(),
                ps.GetMax());
-    // lcd.setCursor(15, 1);
-    // lcd.print(ps.GetName()[0]);
 }
 
 void DisplayHumidity(Sensor<unsigned> &hs)
 {
     lcd.clear();
-    lcd.printf("Hum:%2d %s", hs.GetValue(), hs.GetTime().c_str());
+//    lcd.printf("Hum:%2d %s", hs.GetValue(), hs.GetTime().c_str());
+    lcd.printf("Hum:%2d", hs.GetValue());
+    lcd.setCursor(11, 0);
+    lcd.print(hs.GetTime().c_str());
+
     lcd.setCursor(0, 1);
     lcd.printf("L:%2d H:%2d",
                hs.GetMin(),
                hs.GetMax());
-    // lcd.setCursor(15, 1);
-    // lcd.print(hs.GetName()[0]);
 }
 
 void setup()
@@ -313,52 +239,36 @@ void setup()
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     button.setDebounceTime(50); // set debounce time to 50 milliseconds
 
-    /*
-        bool status = bme.begin();
-        // You can also pass in a Wire library object like &Wire2
-        // status = bme.begin(0x76, &Wire2)
-        if (!status) {
-            Serial.println("Could not find a valid BME280 sensor, check wiring, address, sensor ID!");
-            Serial.print("SensorID was: 0x"); Serial.println(bme.sensorID(),16);
-            Serial.print("        ID of 0xFF probably means a bad address, a BMP 180 or BMP 085\n");
-            Serial.print("   ID of 0x56-0x58 represents a BMP 280,\n");
-            Serial.print("        ID of 0x60 represents a BME 280.\n");
-            Serial.print("        ID of 0x61 represents a BME 680.\n");
-            while (1) delay(10);
-        }
-    */
-
-    // Initialize SPIFFS
-    if (!SPIFFS.begin(true))
+    bool status = bme.begin();
+    // You can also pass in a Wire library object like &Wire2
+    // status = bme.begin(0x76, &Wire2)
+    if (!status)
     {
-        Serial.println("An Error has occurred while mounting SPIFFS");
-        return;
+        Serial.println("Could not find a valid BME280 sensor, check wiring, address, sensor ID!");
+        Serial.print("SensorID was: 0x");
+        Serial.println(bme.sensorID(), 16);
+        Serial.print("        ID of 0xFF probably means a bad address, a BMP 180 or BMP 085\n");
+        Serial.print("   ID of 0x56-0x58 represents a BMP 280,\n");
+        Serial.print("        ID of 0x60 represents a BME 280.\n");
+        Serial.print("        ID of 0x61 represents a BME 680.\n");
     }
-
-    // Load the UTC time offset
-    loadTimeOffset();
 
     // initialize the LCD
     lcd.init();
-    lcd.print("WiFi...");
+    lcd.print("Initialising...");
 
-    setupWiFi();
-    // todo: need to handle the failure to connect case
+    // setup the wifi but using a short timeout and don't reset AP values. That way, the WiFi will connect
+    // if it has been connected before. The user must long press to reset the WiFi credentials.
+    setupWiFi(5);
 
     if (WiFi.status() == WL_CONNECTED)
     {
-        lcd.clear();
-        lcd.print("TimeSync...");
-
-        setupNTP();
-        // todo: need to handle the failure to connect case
+        timeSync("ACST-9:30ACDT,M10.1.0,M4.1.0/3", "pool.ntp.org", "time.nis.gov");
 
         // the time has been synced so we don't need the wifi anymore
-        WiFi.disconnect(true, false);
+        // it seems to be a bad idea to turn off the wifi radio, so just disconnect
+        WiFi.disconnect();
     }
-
-    lcd.clear();
-    lcd.print("Data...");
 
     // Create the message queue
     msg_queue = xQueueCreate(msg_queue_len, sizeof(message_t));
@@ -403,8 +313,19 @@ void loop()
         Serial.printf("Reading ID: %d\n", incomingReadings.readingId);
         Serial.println();
 
-        // todo: hack - display something on the LCD
-        DisplayTemperature(temperatureSensor);
+        // refresh the display.
+        if (currentDisplayMode == TemperatureMode)
+        {
+            DisplayTemperature(temperatureSensor);
+        }
+        else if (currentDisplayMode == PressureMode)
+        {
+            DisplayPressure(pressureSensor);
+        }
+        else if (currentDisplayMode == HumidityMode)
+        {
+            DisplayHumidity(humiditySensor);
+        }
     }
 
     // check the pushbutton
@@ -424,11 +345,42 @@ void loop()
         {
             // long press signifies the user wants to enter wifi credentials
             Serial.println("Long press");
+
+            // setup the wifi
+            lcd.clear();
+            lcd.print("Setup WiFi...");
+
+            setupWiFi(300, true); // timeout is 5 minutes and AP values are cleared
+
+            if (WiFi.status() == WL_CONNECTED)
+            {
+                timeSync("ACST-9:30ACDT,M10.1.0,M4.1.0/3", "pool.ntp.org", "time.nis.gov");
+
+                // the time has been synced so we don't need the wifi anymore
+                WiFi.disconnect();
+            }
         }
         else
         {
             // short press signifies the user wants to change mode, ie, from Temperature to Pressure
             Serial.println("Short press");
+
+            // this will cycle through the enum values. Note that HumidityMode MUST be the last
+            // value defined in the displayMode enumerated type for this to work.
+            currentDisplayMode = (enum displayMode)((currentDisplayMode + 1) % (HumidityMode + 1));
+        }
+        // refresh the display.
+        if (currentDisplayMode == TemperatureMode)
+        {
+            DisplayTemperature(temperatureSensor);
+        }
+        else if (currentDisplayMode == PressureMode)
+        {
+            DisplayPressure(pressureSensor);
+        }
+        else if (currentDisplayMode == HumidityMode)
+        {
+            DisplayHumidity(humiditySensor);
         }
     }
     vTaskDelay(50 / portTICK_PERIOD_MS);

@@ -1,0 +1,13 @@
+tested with no time and it seemed to work fine. time was displayed as XX:XX as expected and the 
+min and max values were updated for each reading. the min/max values will never be cleared.
+
+When powered on the device tries to connect to the wifi using existing credentials. The timeout is short.
+
+if there are no stored AP credentials the device just works as above without having set a time.
+
+A long button press (2 seconds) will cause the device to enter a wifimanager connect and WILL erase any existing credentials.
+The timeout is 5 minutes allowing the user to enter the credentials.
+
+Needed to change the way it obtained the time as it was unreliable. Used the same method as the basestation. Copied the
+timesynch function from influxdb helper code. As a result all reference to SPIFFS were removed as the WM no longer allows
+a time offset to be entered.

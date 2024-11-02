@@ -13,7 +13,7 @@ private:
 
 public:
     // constructor sets the date to "XXXXXXXX" to ensure the min/max values are set on the first call to SetValue()
-    Sensor() : m_date("XXXXXXXX"), m_time("XX:XX"), m_boardName("X"){};
+    Sensor() : m_date("XXXXXXXX"), m_time("XX:XX"), m_boardName("X") {};
 
     bool SetValue(T value, std::string boardName);
     std::string GetName() { return m_boardName; }
@@ -33,9 +33,33 @@ bool Sensor<T>::SetValue(T value, std::string boardName)
     m_value = value;
     m_boardName = boardName;
 
+    if (value > m_max)
+    {
+        m_max = value;
+    }
+    if (value < m_min)
+    {
+        m_min = value;
+    }
+
     //
-    // Leave m_date and m_time at their previous values if time can't be determined
+    // Update the time and reset the min/max values if the date has changed
     //
+    /*
+    can I use this instead of the following code? it's much faster?
+    if (time(nullptr) < 100000)
+    {
+        Serial.println("Failed to obtain time");
+        return false;
+    }
+    else { 
+    if (!getLocalTime(&timeinfo))
+    {
+        Serial.println("Failed to obtain local time");
+        return false;
+    }
+}
+    */
     if (!getLocalTime(&timeinfo))
     {
         Serial.println("Failed to obtain local time");
@@ -58,17 +82,6 @@ bool Sensor<T>::SetValue(T value, std::string boardName)
         m_date = date;
         m_min = value;
         m_max = value;
-    }
-    else
-    {
-        if (value > m_max)
-        {
-            m_max = value;
-        }
-        if (value < m_min)
-        {
-            m_min = value;
-        }
     }
 
     return true;
