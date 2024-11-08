@@ -25,10 +25,16 @@ static const BaseType_t app_cpu = 1;
 #define LONG_PRESS_MS 2000
 
 // todo: set these
-#define BME_SCK 13
+// #define BME_SCK 13
+// #define BME_MISO 12
+// #define BME_MOSI 11
+// #define BME_CS 10
+
+#define BME_SCK 22
 #define BME_MISO 12
-#define BME_MOSI 11
+#define BME_MOSI 21
 #define BME_CS 10
+
 #define SEALEVELPRESSURE_HPA (1013.25)
 
 Adafruit_BME280 bme; // I2C sensor
@@ -158,25 +164,15 @@ void readSensors(void *parameter)
 
     while (1)
     {
-        // todo: read the sensors. can the values ever be invalid?
-        //        msg.temperature = bme.readTemperature();
-        //        msg.tIsValid = true;
+        // Read the sensors
+        msg.temperature = bme.readTemperature();
+        msg.tIsValid = (msg.temperature != NAN);
 
-        //        msg.pressure = bme.readPressure() / 100.0F;
-        //        msg.pIsValid = true;
+        msg.pressure = static_cast<unsigned>(bme.readPressure() / 100.0F);
+        msg.pIsValid = (msg.pressure != 0);
 
-        //        msg.humidity = bme.readHumidity();
-        //        msg.hIsValid = true;
-
-        // Store the sensor data in a queue to be processed by the main loop
-        msg.tIsValid = true;
-        msg.temperature = random(-100, 310) / 10.0;
-
-        msg.pIsValid = true;
-        msg.pressure = random(1000, 1030);
-
-        msg.hIsValid = true;
-        msg.humidity = random(30, 70);
+        msg.humidity = static_cast<unsigned>(bme.readHumidity());
+        msg.hIsValid = (msg.humidity != 0);
 
         msg.readingId = readingId++;
 
@@ -191,7 +187,7 @@ void readSensors(void *parameter)
 void DisplayTemperature(Sensor<float> &ts)
 {
     lcd.clear();
-//    lcd.printf("Temp:%3.1f %s", ts.GetValue(), ts.GetTime().c_str());
+    //    lcd.printf("Temp:%3.1f %s", ts.GetValue(), ts.GetTime().c_str());
     lcd.printf("Temp:%3.1f", ts.GetValue());
     lcd.setCursor(11, 0);
     lcd.print(ts.GetTime().c_str());
@@ -205,7 +201,7 @@ void DisplayTemperature(Sensor<float> &ts)
 void DisplayPressure(Sensor<unsigned> &ps)
 {
     lcd.clear();
-//    lcd.printf("Press:%4d %s", ps.GetValue(), ps.GetTime().c_str());
+    //    lcd.printf("Press:%4d %s", ps.GetValue(), ps.GetTime().c_str());
     lcd.printf("Press:%4d", ps.GetValue());
     lcd.setCursor(11, 0);
     lcd.print(ps.GetTime().c_str());
@@ -219,7 +215,7 @@ void DisplayPressure(Sensor<unsigned> &ps)
 void DisplayHumidity(Sensor<unsigned> &hs)
 {
     lcd.clear();
-//    lcd.printf("Hum:%2d %s", hs.GetValue(), hs.GetTime().c_str());
+    //    lcd.printf("Hum:%2d %s", hs.GetValue(), hs.GetTime().c_str());
     lcd.printf("Hum:%2d", hs.GetValue());
     lcd.setCursor(11, 0);
     lcd.print(hs.GetTime().c_str());
@@ -277,7 +273,7 @@ void setup()
     xTaskCreatePinnedToCore(
         readSensors,    // Function that should be called
         "Read Sensors", // Name of the task (for debugging)
-        1024,           // Stack size (bytes)
+        4096,           // Stack size (bytes)
         NULL,           // Parameter to pass
         1,              // Task priority
         NULL,           // Task handle
