@@ -24,12 +24,6 @@ static const BaseType_t app_cpu = 1;
 // How many ms equates to a long button press
 #define LONG_PRESS_MS 2000
 
-// todo: set these
-// #define BME_SCK 13
-// #define BME_MISO 12
-// #define BME_MOSI 11
-// #define BME_CS 10
-
 #define BME_SCK 22
 #define BME_MISO 12
 #define BME_MOSI 21
@@ -38,6 +32,12 @@ static const BaseType_t app_cpu = 1;
 #define SEALEVELPRESSURE_HPA (1013.25)
 
 Adafruit_BME280 bme; // I2C sensor
+
+// todo: Consider adding a photoresistor to the board and dimming the display at night. Is this too complex?
+// read the resistor every second (?) using a RTOS task or in loop () [simpler] and adjust the brightness accordingly
+// RTOS will require a semaphore to protect access to the LCD?????
+// uses a photoresistor and a 10k resistor in a voltage divider configuration
+// use an inverse mapping from the brightness resitor value (0 .. 4095) to the brightness level (0 .. 255) set via lcd.setPWM()
 
 // LCD display is 16 characters and 2 lines. RGB address 0x6B is for LCD1602 v1.1
 DFRobot_RGBLCD1602 lcd(0x6B, 16, 2);
