@@ -21,6 +21,10 @@ static const BaseType_t app_cpu = 1;
 // The pin the button is wired to
 #define BUTTON_PIN 23
 
+// Define the pin for the photoresistor. Note that ADC2 pins cannot be used when WiFi is being used.
+// This is because the WiFi driver uses ADC2 pins. The photoresistor is connected to an ADC1 pin.
+#define photoResistorPin 34
+
 // How many ms equates to a long button press
 #define LONG_PRESS_MS 2000
 
@@ -33,11 +37,8 @@ static const BaseType_t app_cpu = 1;
 
 Adafruit_BME280 bme; // I2C sensor
 
-// todo: Consider adding a photoresistor to the board and dimming the display at night. Is this too complex?
-// read the resistor every second (?) using a RTOS task or in loop () [simpler] and adjust the brightness accordingly
-// RTOS will require a semaphore to protect access to the LCD?????
-// uses a photoresistor and a 10k resistor in a voltage divider configuration
-// use an inverse mapping from the brightness resitor value (0 .. 4095) to the brightness level (0 .. 255) set via lcd.setPWM()
+// Create a mutex handle to ensure the LCD is not accessed by multiple tasks at the same time
+SemaphoreHandle_t xMutex;
 
 // LCD display is 16 characters and 2 lines. RGB address 0x6B is for LCD1602 v1.1
 DFRobot_RGBLCD1602 lcd(0x6B, 16, 2);
@@ -71,7 +72,7 @@ enum status : char
 // RTOS queue settings
 
 // Size of msg_queue. Needs to be large enough to hold all messages.
-// Entering WiFi credentials can cause up to 6 messages to be generated
+// Entering WiFi credentials can cause a message a minute to be generated during the 5 minute timeout.
 const int msg_queue_len = 10;
 QueueHandle_t msg_queue;
 
@@ -157,6 +158,38 @@ void setupWiFi(int timeoutSeconds, bool resetSettings = false)
     }
 }
 
+void adjustBacklight(void *parameter)
+{
+    int photoValue;
+    int pwm;
+
+    while (1)
+    {
+        // Read the value from the photo resistor. the value will be between 0 and 4095. the higher the value, the brighter the light
+        photoValue = analogRead(photoResistorPin);
+
+        Serial.print("Photo Resistor Value: ");
+        Serial.println(photoValue); // Print the value to the serial monitor
+
+        pwm = map(photoValue, 0, 2000, 125, 255);
+        if (pwm > 255)
+        {
+            pwm = 255;
+        }
+
+        // Protect access to the LCD with the mutex
+        if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+        {
+            // Set the backlight intensity to the mapped value
+            lcd.setPWM(lcd.REG_ONLY, pwm);
+
+            // Release the mutex
+            xSemaphoreGive(xMutex);
+        }
+        vTaskDelay(5000 / portTICK_PERIOD_MS);
+    }
+}
+
 void readSensors(void *parameter)
 {
     message_t msg;
@@ -186,44 +219,59 @@ void readSensors(void *parameter)
 
 void DisplayTemperature(Sensor<float> &ts)
 {
-    lcd.clear();
-    //    lcd.printf("Temp:%3.1f %s", ts.GetValue(), ts.GetTime().c_str());
-    lcd.printf("Temp:%3.1f", ts.GetValue());
-    lcd.setCursor(11, 0);
-    lcd.print(ts.GetTime().c_str());
+    // Protect access to the LCD with the mutex
+    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+    {
+        lcd.clear();
+        lcd.printf("Temp:%3.1f", ts.GetValue());
+        lcd.setCursor(11, 0);
+        lcd.print(ts.GetTime().c_str());
+        lcd.setCursor(0, 1);
+        lcd.printf("L:%3.1f H:%3.1f",
+                   ts.GetMin(),
+                   ts.GetMax());
 
-    lcd.setCursor(0, 1);
-    lcd.printf("L:%3.1f H:%3.1f",
-               ts.GetMin(),
-               ts.GetMax());
+        // Release the mutex
+        xSemaphoreGive(xMutex);
+    }
 }
 
 void DisplayPressure(Sensor<unsigned> &ps)
 {
-    lcd.clear();
-    //    lcd.printf("Press:%4d %s", ps.GetValue(), ps.GetTime().c_str());
-    lcd.printf("Press:%4d", ps.GetValue());
-    lcd.setCursor(11, 0);
-    lcd.print(ps.GetTime().c_str());
+    // Protect access to the LCD with the mutex
+    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+    {
+        lcd.clear();
+        lcd.printf("Press:%4d", ps.GetValue());
+        lcd.setCursor(11, 0);
+        lcd.print(ps.GetTime().c_str());
+        lcd.setCursor(0, 1);
+        lcd.printf("L:%4d H:%4d",
+                   ps.GetMin(),
+                   ps.GetMax());
 
-    lcd.setCursor(0, 1);
-    lcd.printf("L:%4d H:%4d",
-               ps.GetMin(),
-               ps.GetMax());
+        // Release the mutex
+        xSemaphoreGive(xMutex);
+    }
 }
 
 void DisplayHumidity(Sensor<unsigned> &hs)
 {
-    lcd.clear();
-    //    lcd.printf("Hum:%2d %s", hs.GetValue(), hs.GetTime().c_str());
-    lcd.printf("Hum:%2d", hs.GetValue());
-    lcd.setCursor(11, 0);
-    lcd.print(hs.GetTime().c_str());
+    // Protect access to the LCD with the mutex
+    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+    {
+        lcd.clear();
+        lcd.printf("Hum:%2d", hs.GetValue());
+        lcd.setCursor(11, 0);
+        lcd.print(hs.GetTime().c_str());
+        lcd.setCursor(0, 1);
+        lcd.printf("L:%2d H:%2d",
+                   hs.GetMin(),
+                   hs.GetMax());
 
-    lcd.setCursor(0, 1);
-    lcd.printf("L:%2d H:%2d",
-               hs.GetMin(),
-               hs.GetMax());
+        // Release the mutex
+        xSemaphoreGive(xMutex);
+    }
 }
 
 void setup()
@@ -232,12 +280,11 @@ void setup()
     Serial.begin(115200);
     vTaskDelay(2000 / portTICK_PERIOD_MS);
 
+    pinMode(photoResistorPin, INPUT); // Set the photo resistor pin as an input
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     button.setDebounceTime(50); // set debounce time to 50 milliseconds
 
     bool status = bme.begin();
-    // You can also pass in a Wire library object like &Wire2
-    // status = bme.begin(0x76, &Wire2)
     if (!status)
     {
         Serial.println("Could not find a valid BME280 sensor, check wiring, address, sensor ID!");
@@ -249,7 +296,11 @@ void setup()
         Serial.print("        ID of 0x61 represents a BME 680.\n");
     }
 
-    // initialize the LCD
+    // Create the mutex for LCD access
+    xMutex = xSemaphoreCreateMutex();
+
+    // initialize the LCD. Don't need to protect this with the mutex as it is only called once. There are
+    // no other tasks running at this point.
     lcd.init();
     lcd.print("Initialising...");
 
@@ -266,10 +317,10 @@ void setup()
         WiFi.disconnect();
     }
 
-    // Create the message queue
+    // Create the message queue used to pass sensor data to the main loop
     msg_queue = xQueueCreate(msg_queue_len, sizeof(message_t));
 
-    // this function is specific to ESP32 RTOS with core parameter added
+    // Define the task that will read the sensors
     xTaskCreatePinnedToCore(
         readSensors,    // Function that should be called
         "Read Sensors", // Name of the task (for debugging)
@@ -278,6 +329,16 @@ void setup()
         1,              // Task priority
         NULL,           // Task handle
         app_cpu);       // which core to use
+
+    // Define the task that will adjust the backlight
+    xTaskCreatePinnedToCore(
+        adjustBacklight,    // Function that should be called
+        "Adjust Backlight", // Name of the task (for debugging)
+        2048,               // Stack size (bytes)
+        NULL,               // Parameter to pass
+        1,                  // Task priority
+        NULL,               // Task handle
+        app_cpu);           // which core to use
 }
 
 void loop()
@@ -293,11 +354,19 @@ void loop()
             Serial.printf("Temperature: %3.1f\n", incomingReadings.temperature);
             temperatureSensor.SetValue(incomingReadings.temperature, "Builtin");
         }
+        else
+        {
+            Serial.println("Temperature reading is invalid");
+        }
 
         if (incomingReadings.pIsValid)
         {
             Serial.printf("Pressure: %d\n", incomingReadings.pressure);
             pressureSensor.SetValue(incomingReadings.pressure, "Builtin");
+        }
+        else
+        {
+            Serial.println("Pressure reading is invalid");
         }
 
         if (incomingReadings.hIsValid)
@@ -305,9 +374,12 @@ void loop()
             Serial.printf("Humidity: %d\n", incomingReadings.humidity);
             humiditySensor.SetValue(incomingReadings.humidity, "Builtin");
         }
+        else
+        {
+            Serial.println("Humidity reading is invalid");
+        }
 
-        Serial.printf("Reading ID: %d\n", incomingReadings.readingId);
-        Serial.println();
+        Serial.printf("Reading ID: %d\n\n", incomingReadings.readingId);
 
         // refresh the display.
         if (currentDisplayMode == TemperatureMode)
@@ -342,10 +414,17 @@ void loop()
             // long press signifies the user wants to enter wifi credentials
             Serial.println("Long press");
 
-            // setup the wifi
-            lcd.clear();
-            lcd.print("Setup WiFi...");
+            // Protect access to the LCD with the mutex
+            if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+            {
+                lcd.clear();
+                lcd.print("Setup WiFi...");
 
+                // Release the mutex
+                xSemaphoreGive(xMutex);
+            }
+
+            // setup the wifi
             setupWiFi(300, true); // timeout is 5 minutes and AP values are cleared
 
             if (WiFi.status() == WL_CONNECTED)
