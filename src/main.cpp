@@ -38,7 +38,7 @@ static const BaseType_t app_cpu = 1;
 Adafruit_BME280 bme; // I2C sensor
 
 // Create a mutex handle to ensure the LCD is not accessed by multiple tasks at the same time
-SemaphoreHandle_t xMutex;
+SemaphoreHandle_t xLCDMutex;
 
 // LCD display is 16 characters and 2 lines. RGB address 0x6B is for LCD1602 v1.1
 DFRobot_RGBLCD1602 lcd(0x6B, 16, 2);
@@ -178,13 +178,13 @@ void adjustBacklight(void *parameter)
         }
 
         // Protect access to the LCD with the mutex
-        if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+        if (xSemaphoreTake(xLCDMutex, portMAX_DELAY) == pdTRUE)
         {
             // Set the backlight intensity to the mapped value
             lcd.setPWM(lcd.REG_ONLY, pwm);
 
             // Release the mutex
-            xSemaphoreGive(xMutex);
+            xSemaphoreGive(xLCDMutex);
         }
         vTaskDelay(5000 / portTICK_PERIOD_MS);
     }
@@ -220,7 +220,7 @@ void readSensors(void *parameter)
 void DisplayTemperature(Sensor<float> &ts)
 {
     // Protect access to the LCD with the mutex
-    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+    if (xSemaphoreTake(xLCDMutex, portMAX_DELAY) == pdTRUE)
     {
         lcd.clear();
         lcd.printf("Temp:%3.1f", ts.GetValue());
@@ -232,14 +232,14 @@ void DisplayTemperature(Sensor<float> &ts)
                    ts.GetMax());
 
         // Release the mutex
-        xSemaphoreGive(xMutex);
+        xSemaphoreGive(xLCDMutex);
     }
 }
 
 void DisplayPressure(Sensor<unsigned> &ps)
 {
     // Protect access to the LCD with the mutex
-    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+    if (xSemaphoreTake(xLCDMutex, portMAX_DELAY) == pdTRUE)
     {
         lcd.clear();
         lcd.printf("Press:%4d", ps.GetValue());
@@ -251,14 +251,14 @@ void DisplayPressure(Sensor<unsigned> &ps)
                    ps.GetMax());
 
         // Release the mutex
-        xSemaphoreGive(xMutex);
+        xSemaphoreGive(xLCDMutex);
     }
 }
 
 void DisplayHumidity(Sensor<unsigned> &hs)
 {
     // Protect access to the LCD with the mutex
-    if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+    if (xSemaphoreTake(xLCDMutex, portMAX_DELAY) == pdTRUE)
     {
         lcd.clear();
         lcd.printf("Hum:%2d", hs.GetValue());
@@ -270,7 +270,7 @@ void DisplayHumidity(Sensor<unsigned> &hs)
                    hs.GetMax());
 
         // Release the mutex
-        xSemaphoreGive(xMutex);
+        xSemaphoreGive(xLCDMutex);
     }
 }
 
@@ -297,7 +297,7 @@ void setup()
     }
 
     // Create the mutex for LCD access
-    xMutex = xSemaphoreCreateMutex();
+    xLCDMutex = xSemaphoreCreateMutex();
 
     // initialize the LCD. Don't need to protect this with the mutex as it is only called once. There are
     // no other tasks running at this point.
@@ -415,13 +415,13 @@ void loop()
             Serial.println("Long press");
 
             // Protect access to the LCD with the mutex
-            if (xSemaphoreTake(xMutex, portMAX_DELAY) == pdTRUE)
+            if (xSemaphoreTake(xLCDMutex, portMAX_DELAY) == pdTRUE)
             {
                 lcd.clear();
                 lcd.print("Setup WiFi...");
 
                 // Release the mutex
-                xSemaphoreGive(xMutex);
+                xSemaphoreGive(xLCDMutex);
             }
 
             // setup the wifi
