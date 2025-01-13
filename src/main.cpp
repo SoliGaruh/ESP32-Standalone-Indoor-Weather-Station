@@ -311,11 +311,13 @@ void setup()
     if (WiFi.status() == WL_CONNECTED)
     {
         timeSync("ACST-9:30ACDT,M10.1.0,M4.1.0/3", "pool.ntp.org", "time.nis.gov");
-
-        // the time has been synced so we don't need the wifi anymore
-        // it seems to be a bad idea to turn off the wifi radio, so just disconnect
-        WiFi.disconnect();
     }
+
+    // disconnect the WiFi as it is no longer needed. Only used to grab the time. Turn off the WiFi radio as well to generate
+    // less heat.
+
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
 
     // Create the message queue used to pass sensor data to the main loop
     msg_queue = xQueueCreate(msg_queue_len, sizeof(message_t));
@@ -430,10 +432,12 @@ void loop()
             if (WiFi.status() == WL_CONNECTED)
             {
                 timeSync("ACST-9:30ACDT,M10.1.0,M4.1.0/3", "pool.ntp.org", "time.nis.gov");
-
-                // the time has been synced so we don't need the wifi anymore
-                WiFi.disconnect();
             }
+
+            // disconnect the WiFi as it is no longer needed. Only used to grab the time. Turn off the WiFi radio as well to generate
+            // less heat.
+            WiFi.disconnect(true);
+            WiFi.mode(WIFI_OFF);
         }
         else
         {
@@ -458,5 +462,5 @@ void loop()
             DisplayHumidity(humiditySensor);
         }
     }
-    vTaskDelay(50 / portTICK_PERIOD_MS);
+    vTaskDelay(100 / portTICK_PERIOD_MS);
 }
