@@ -212,8 +212,7 @@ void readSensors(void *parameter)
 
         xQueueSend(msg_queue, (void *)&msg, 10 / portTICK_PERIOD_MS);
 
-        // when the wifi is disconnected the main loop takes ages to process the queue, so the task needs to wait
-        // or risk overflowing the queue
+        // The sensors are read once per minute
         vTaskDelay(60000 / portTICK_PERIOD_MS);
     }
 }
