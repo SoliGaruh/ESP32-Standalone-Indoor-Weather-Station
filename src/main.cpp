@@ -40,6 +40,7 @@ Adafruit_BME280 bme; // I2C sensor
 // Create a mutex handle to ensure the LCD is not accessed by multiple tasks at the same time
 SemaphoreHandle_t xLCDMutex;
 
+// LCD display is 16 characters and 2 lines. RGB address 0x60 is for LCD1602 v1.0
 // LCD display is 16 characters and 2 lines. RGB address 0x6B is for LCD1602 v1.1
 DFRobot_RGBLCD1602 lcd(0x6B, 16, 2);
 
